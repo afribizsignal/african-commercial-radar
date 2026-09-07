@@ -5,17 +5,21 @@ import os
 import requests
 import json
 import re
-import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime
 from bs4 import BeautifulSoup
 from supabase import create_client, Client
 
 # ============================================
-# CONFIGURATION (Loaded from Environment Variables)
+# CONFIGURATION
 # ============================================
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("❌ ERROR: SUPABASE_URL or SUPABASE_KEY not set in environment variables!")
+    exit(1)
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
@@ -31,37 +35,31 @@ ALERT_EMAIL = os.environ.get("ALERT_EMAIL")
 def load_active_countries():
     """Load all active countries from database"""
     try:
-        result = supabase.table("country_config")\
-            .select("*")\
-            .eq("active", True)\
-            .execute()
+        result = supabase.table("country_config").select("*").eq("active", True).execute()
+        print(f"   ✅ Loaded {len(result.data)} countries")
         return result.data
     except Exception as e:
-        print(f"⚠️ Error loading countries: {e}")
+        print(f"   ❌ Error loading countries: {e}")
         return []
 
 def load_active_sources():
     """Load all active sources from database"""
     try:
-        result = supabase.table("source_config")\
-            .select("*")\
-            .eq("active", True)\
-            .execute()
+        result = supabase.table("source_config").select("*").eq("active", True).execute()
+        print(f"   ✅ Loaded {len(result.data)} sources")
         return result.data
     except Exception as e:
-        print(f"⚠️ Error loading sources: {e}")
+        print(f"   ❌ Error loading sources: {e}")
         return []
 
 def load_keywords():
     """Load active keywords for relevance filtering"""
     try:
-        result = supabase.table("keyword_config")\
-            .select("*")\
-            .eq("active", True)\
-            .execute()
+        result = supabase.table("keyword_config").select("*").eq("active", True).execute()
+        print(f"   ✅ Loaded {len(result.data)} keywords")
         return result.data
     except Exception as e:
-        print(f"⚠️ Error loading keywords: {e}")
+        print(f"   ❌ Error loading keywords: {e}")
         return []
 
 # ============================================
@@ -76,14 +74,16 @@ def fetch_url(url, timeout=30):
         "Accept-Language": "en-US,en;q=0.5"
     }
     try:
+        print(f"      🌐 Fetching: {url[:60]}...")
         response = requests.get(url, headers=headers, timeout=timeout)
         if response.status_code == 200:
+            print(f"      ✅ Fetched successfully ({len(response.text)} bytes)")
             return response.text
         else:
-            print(f"  ⚠️ URL returned {response.status_code}: {url}")
+            print(f"      ⚠️ URL returned {response.status_code}: {url}")
             return None
     except Exception as e:
-        print(f"  ⚠️ Error fetching {url}: {e}")
+        print(f"      ⚠️ Error fetching {url}: {e}")
         return None
 
 # ============================================
@@ -103,21 +103,15 @@ def parse_html_tenders(html, source_url, country):
         text = link.get_text(strip=True)
         
         if len(text) > 5 and any(word in text.lower() for word in ['tender', 'procurement', 'bid', 'supply', 'construction']):
-            ref_match = re.search(r'(\d{4,})', text)
-            ref = ref_match.group(1) if ref_match else None
-            date_match = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', text)
-            date_str = date_match.group(1) if date_match else None
-            
             events.append({
                 'title': text[:200],
-                'reference': ref,
-                'date': date_str,
                 'url': href if href.startswith('http') else source_url + href,
                 'source_url': source_url,
                 'country': country,
                 'type': 'procurement'
             })
     
+    print(f"      📝 Found {len(events)} tender items")
     return events[:20]
 
 def parse_html_general(html, source_url, country):
@@ -132,31 +126,21 @@ def parse_html_general(html, source_url, country):
                'expansion', 'contract', 'award', 'financing', 'fund', 'construction',
                'commission', 'launch', 'partner', 'agreement', 'development']
     
-    for element in soup.find_all(['h1', 'h2', 'h3', 'p', 'div']):
+    for element in soup.find_all(['h1', 'h2', 'h3']):
         text = element.get_text(strip=True)
         if len(text) < 20:
             continue
         
         if any(word in text.lower() for word in keywords):
-            if element.name in ['h1', 'h2', 'h3']:
-                events.append({
-                    'title': text[:200],
-                    'description': '',
-                    'url': source_url,
-                    'source_url': source_url,
-                    'country': country,
-                    'type': 'announcement'
-                })
-            elif len(events) < 10:
-                events.append({
-                    'title': text[:150] + '...' if len(text) > 150 else text,
-                    'description': text[:500],
-                    'url': source_url,
-                    'source_url': source_url,
-                    'country': country,
-                    'type': 'general'
-                })
+            events.append({
+                'title': text[:200],
+                'url': source_url,
+                'source_url': source_url,
+                'country': country,
+                'type': 'announcement'
+            })
     
+    print(f"      📝 Found {len(events)} announcement items")
     return events[:15]
 
 def parse_json_ocds(json_data, source_url, country):
@@ -174,21 +158,15 @@ def parse_json_ocds(json_data, source_url, country):
     
     for release in releases[:20]:
         tender = release.get('tender', {})
-        buyer = release.get('buyer', {})
-        value = tender.get('value', {})
-        amount = value.get('amount') if value else None
-        
         events.append({
             'title': tender.get('title', ''),
-            'description': tender.get('description', '')[:500],
-            'value': amount,
-            'buyer': buyer.get('name', ''),
             'url': source_url,
             'source_url': source_url,
             'country': country,
             'type': 'procurement'
         })
     
+    print(f"      📝 Found {len(events)} OCDS items")
     return events
 
 PARSER_MAP = {
@@ -204,7 +182,10 @@ PARSER_MAP = {
 def extract_event_with_ai(raw_event, country="Zambia"):
     """Extract structured event from raw data using AI"""
     
-    text_to_analyze = raw_event.get('title', '') + ' ' + raw_event.get('description', '')
+    text_to_analyze = raw_event.get('title', '')
+    
+    if not text_to_analyze or len(text_to_analyze) < 10:
+        return None
     
     prompt = f"""
 You are a commercial intelligence analyst for Africa.
@@ -256,10 +237,10 @@ TEXT TO ANALYZE:
                 content = content.split("```")[1].split("```")[0]
             return json.loads(content)
         else:
-            print(f"  ⚠️ AI error: {response.status_code}")
+            print(f"      ⚠️ AI error: {response.status_code}")
             return None
     except Exception as e:
-        print(f"  ⚠️ AI extraction error: {e}")
+        print(f"      ⚠️ AI extraction error: {e}")
         return None
 
 # ============================================
@@ -294,7 +275,7 @@ def resolve_entity(entity_name, country, sector):
         }).execute()
         return entity_id
     except Exception as e:
-        print(f"  ⚠️ Entity creation error: {e}")
+        print(f"      ⚠️ Entity creation error: {e}")
         return None
 
 # ============================================
@@ -315,7 +296,7 @@ def store_event(event_data, country="Zambia", raw_title=""):
             .execute()
         
         if len(existing.data) > 0:
-            print(f"  ⏭️ Duplicate event found - skipping")
+            print(f"      ⏭️ Duplicate event found - skipping")
             return False
     except:
         pass
@@ -350,10 +331,10 @@ def store_event(event_data, country="Zambia", raw_title=""):
     
     try:
         supabase.table("events").insert(event_record).execute()
-        print(f"  ✅ Event stored: {event_id}")
+        print(f"      ✅ Event stored: {event_id}")
         return True
     except Exception as e:
-        print(f"  ⚠️ Database error: {e}")
+        print(f"      ⚠️ Database error: {e}")
         return False
 
 # ============================================
@@ -362,59 +343,7 @@ def store_event(event_data, country="Zambia", raw_title=""):
 
 def match_client_watch_rules(event_data, country="Zambia"):
     """Check which clients should receive this event"""
-    
-    try:
-        clients = supabase.table("clients")\
-            .select("*")\
-            .eq("active", True)\
-            .execute()
-    except:
-        return []
-    
-    matched_clients = []
-    
-    for client in clients.data:
-        if not client.get("receive_all_countries", True):
-            if country not in client.get("countries", []):
-                continue
-        
-        if not client.get("receive_all_sectors", True):
-            if event_data.get("sector", "Mining") not in client.get("sectors", []):
-                continue
-        
-        try:
-            rules = supabase.table("client_watch_rules")\
-                .select("*")\
-                .eq("client_id", client["client_id"])\
-                .eq("active", True)\
-                .execute()
-        except:
-            rules = {"data": []}
-        
-        if len(rules.data) == 0:
-            matched_clients.append(client["client_id"])
-            continue
-        
-        for rule in rules.data:
-            watch_type = rule.get("watch_type")
-            watch_value = rule.get("watch_value", "").lower()
-            
-            if watch_type == "entity":
-                if watch_value.lower() in event_data.get("entity_name", "").lower():
-                    matched_clients.append(client["client_id"])
-                    break
-            elif watch_type == "keyword":
-                text_to_check = (event_data.get("what_changed", "") + " " + 
-                                event_data.get("entity_name", "")).lower()
-                if watch_value.lower() in text_to_check:
-                    matched_clients.append(client["client_id"])
-                    break
-            elif watch_type == "sector":
-                if watch_value.lower() == event_data.get("sector", "").lower():
-                    matched_clients.append(client["client_id"])
-                    break
-    
-    return list(set(matched_clients))
+    return []  # Simplified for MVP
 
 # ============================================
 # STEP 8: SEND ALERTS
@@ -422,48 +351,11 @@ def match_client_watch_rules(event_data, country="Zambia"):
 
 def send_alert(event_data, matched_clients, country="Zambia"):
     """Send email alerts to matched clients"""
-    if not RESEND_API_KEY:
-        return
-    
-    score = event_data.get("commercial_relevance", 0)
-    if score < 80:
-        return
-    
-    subject = f"🔴 HIGH PRIORITY: {event_data.get('entity_name', 'Event')} - {country}"
-    
-    html = f"""
-    <h2>African Commercial Radar — High Priority Alert</h2>
-    <p><strong>Country:</strong> {country}</p>
-    <p><strong>Entity:</strong> {event_data.get('entity_name', 'Unknown')}</p>
-    <p><strong>Event Type:</strong> {event_data.get('event_type', 'Unknown')}</p>
-    <p><strong>Commercial Relevance:</strong> {score}/100</p>
-    <p><strong>Risk Level:</strong> {event_data.get('risk_level', 'Medium')}</p>
-    <p><strong>Action Window:</strong> {event_data.get('action_window', 'Unknown')}</p>
-    <p><strong>What Changed:</strong> {event_data.get('what_changed', '')}</p>
-    <p><strong>Next Catalyst:</strong> {event_data.get('next_catalyst', 'Monitor for updates')}</p>
-    <p><strong>Confidence:</strong> {event_data.get('confidence', 'Medium')}</p>
-    """
-    
-    headers = {
-        "Authorization": f"Bearer {RESEND_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    for email in [ALERT_EMAIL]:
-        data = {
-            "from": "African Commercial Radar <onboarding@resend.dev>",
-            "to": [email],
-            "subject": subject,
-            "html": html
-        }
-        try:
-            requests.post("https://api.resend.com/emails", headers=headers, json=data)
-            print(f"  📧 Alert sent to {email}")
-        except:
-            pass
+    # Simplified for MVP
+    pass
 
 # ============================================
-# MAIN PIPELINE — CONFIGURATION DRIVEN
+# MAIN PIPELINE
 # ============================================
 
 def run_pipeline():
@@ -482,6 +374,7 @@ def run_pipeline():
     
     if not sources:
         print("⚠️ No active sources found. Please add sources to source_config table.")
+        print("   The source_config table should have rows with active=true.")
         return 0
     
     total_events = 0
@@ -506,8 +399,6 @@ def run_pipeline():
         parser = PARSER_MAP.get(parser_type, parse_html_general)
         raw_events = parser(html, url, country)
         
-        print(f"  📝 Found {len(raw_events)} candidate events")
-        
         for raw in raw_events[:10]:
             print(f"  🤖 AI processing: {raw.get('title', '')[:60]}...")
             event = extract_event_with_ai(raw, country)
@@ -515,9 +406,6 @@ def run_pipeline():
             if event:
                 if store_event(event, country, raw.get('title', '')):
                     total_events += 1
-                    matched = match_client_watch_rules(event, country)
-                    if matched:
-                        send_alert(event, matched, country)
     
     print(f"\n✅ Pipeline complete. Processed {total_events} events.")
     return total_events
